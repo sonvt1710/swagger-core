@@ -1,7 +1,9 @@
 package io.swagger.v3.core.oas.models;
 
+import javax.annotation.Nonnull;
 import javax.validation.constraints.DecimalMax;
 import javax.validation.constraints.DecimalMin;
+import javax.validation.constraints.Email;
 import javax.validation.constraints.Max;
 import javax.validation.constraints.Min;
 import javax.validation.constraints.NotNull;
@@ -18,6 +20,8 @@ public class BeanValidationsModel {
     @Max(99)
     protected Integer age;
 
+    @Pattern(regexp = "(?![-._])[-._a-zA-Z0-9]{3,32}")
+    @Nonnull
     protected String username;
 
     @Size(min = 6, max = 20)
@@ -25,7 +29,7 @@ public class BeanValidationsModel {
 
     protected String passwordHint;
 
-    @Pattern(regexp = "(.+?)@(.+?)")
+    @Email
     protected String email;
 
     @DecimalMin(value = "0.1", inclusive = false)
