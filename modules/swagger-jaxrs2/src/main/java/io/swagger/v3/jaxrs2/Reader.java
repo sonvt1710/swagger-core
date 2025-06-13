@@ -287,8 +287,15 @@ public class Reader implements OpenApiReader {
         Hidden hidden = cls.getAnnotation(Hidden.class);
         // class path
         final javax.ws.rs.Path apiPath = ReflectionUtils.getAnnotation(cls, javax.ws.rs.Path.class);
+        final boolean openapi31 = Boolean.TRUE.equals(config.isOpenAPI31());
 
-        if (Boolean.TRUE.equals(config.isOpenAPI31())) {
+        if (
+                openapi31 &&
+                (
+                        config.getOpenAPI() == null ||
+                        config.getOpenAPI().getOpenapi() == null ||
+                        config.getOpenAPI().getOpenapi().startsWith("3.0")
+                ) && config.getOpenAPIVersion() == null) {
             openAPI.setOpenapi("3.1.0");
         }
 
@@ -342,7 +349,7 @@ public class Reader implements OpenApiReader {
             // OpenApiDefinition extensions
             if (openAPIDefinition.extensions().length > 0) {
                 openAPI.setExtensions(AnnotationsUtils
-                        .getExtensions(config.isOpenAPI31(), openAPIDefinition.extensions()));
+                        .getExtensions(openapi31, openAPIDefinition.extensions()));
             }
 
         }
@@ -407,7 +414,7 @@ public class Reader implements OpenApiReader {
 
         JavaType classType = TypeFactory.defaultInstance().constructType(cls);
         BeanDescription bd;
-        if (Boolean.TRUE.equals(config.isOpenAPI31())) {
+        if (openapi31) {
             bd = Json31.mapper().getSerializationConfig().introspect(classType);
         } else {
             bd = Json.mapper().getSerializationConfig().introspect(classType);
@@ -416,7 +423,7 @@ public class Reader implements OpenApiReader {
         final List<Parameter> globalParameters = new ArrayList<>();
 
         // look for constructor-level annotated properties
-        globalParameters.addAll(ReaderUtils.collectConstructorParameters(cls, components, classConsumes, null, config.getSchemaResolution()));
+        globalParameters.addAll(ReaderUtils.collectConstructorParameters(cls, components, classConsumes, null, config.getSchemaResolution(), openapi31));
 
         // look for field-level annotated properties
         globalParameters.addAll(ReaderUtils.collectFieldParameters(cls, components, classConsumes, null));

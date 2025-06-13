@@ -65,6 +65,7 @@ import io.swagger.v3.oas.models.media.Schema;
 import io.swagger.v3.oas.models.media.StringSchema;
 import io.swagger.v3.oas.models.media.UUIDSchema;
 import io.swagger.v3.oas.models.media.XML;
+import javax.validation.constraints.Email;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.math.NumberUtils;
 import org.slf4j.Logger;
@@ -334,8 +335,9 @@ public class ModelResolver extends AbstractModelConverter implements ModelConver
         }
 
         if (model == null && type.isEnumType()) {
-            model = openapi31 ? new JsonSchema().typesItem("string") : new StringSchema();
-            _addEnumProps(type.getRawClass(), model);
+            @SuppressWarnings("unchecked")
+            Class<Enum<?>> rawEnumClass = (Class<Enum<?>>) type.getRawClass();
+            model = _createSchemaForEnum(rawEnumClass);
             isPrimitive = true;
         }
         if (model == null) {
@@ -1291,48 +1293,76 @@ public class ModelResolver extends AbstractModelConverter implements ModelConver
     }
 
     /**
-     * Adds each enum property value to the model schema
-     *
-     * @param propClass the enum class for which to add properties
-     * @param property  the schema to add properties to
+     * @deprecated use '_createSchemaForEnum'
      */
     protected void _addEnumProps(Class<?> propClass, Schema property) {
-        final boolean useIndex = _mapper.isEnabled(SerializationFeature.WRITE_ENUMS_USING_INDEX);
-        final boolean useToString = _mapper.isEnabled(SerializationFeature.WRITE_ENUMS_USING_TO_STRING);
+        if (propClass.isEnum()) {
+            Class<Enum<?>> rawEnumClass = (Class<Enum<?>>) propClass;
+            Schema enumSchema = _createSchemaForEnum(rawEnumClass);
+            if (enumSchema != null) {
+                property.setEnum(enumSchema.getEnum());
+                property.setType(enumSchema.getType());
+                property.setFormat(enumSchema.getFormat());
+                property.setName(enumSchema.getName());
+                property.setDescription(enumSchema.getDescription());
+            }
+        }
+    }
 
-        Optional<Method> jsonValueMethod = Arrays.stream(propClass.getDeclaredMethods())
+    /**
+     * Adds each enum property value to the model schema
+     *
+     * @param enumClass the enum class for which to add properties
+     */
+    protected Schema _createSchemaForEnum(Class<Enum<?>> enumClass) {
+        boolean useIndex = _mapper.isEnabled(SerializationFeature.WRITE_ENUMS_USING_INDEX);
+        boolean useToString = _mapper.isEnabled(SerializationFeature.WRITE_ENUMS_USING_TO_STRING);
+
+        Optional<Method> jsonValueMethod = Arrays.stream(enumClass.getDeclaredMethods())
                 .filter(m -> m.isAnnotationPresent(JsonValue.class))
                 .filter(m -> m.getAnnotation(JsonValue.class).value())
                 .findFirst();
 
-        Optional<Field> jsonValueField = Arrays.stream(propClass.getDeclaredFields())
+        Optional<Field> jsonValueField = Arrays.stream(enumClass.getDeclaredFields())
                 .filter(f -> f.isAnnotationPresent(JsonValue.class))
                 .filter(f -> f.getAnnotation(JsonValue.class).value())
                 .findFirst();
 
-        jsonValueMethod.ifPresent(m -> m.setAccessible(true));
-        jsonValueField.ifPresent(m -> m.setAccessible(true));
-        @SuppressWarnings("unchecked")
-        Class<Enum<?>> enumClass = (Class<Enum<?>>) propClass;
+        Schema schema = null;
+        if (jsonValueField.isPresent()) {
+            jsonValueField.get().setAccessible(true);
+            PrimitiveType primitiveType = PrimitiveType.fromType(jsonValueField.get().getType());
+            if (primitiveType != null) {
+                schema = openapi31 ? primitiveType.createProperty31() : primitiveType.createProperty();
+            }
+        } else if (jsonValueMethod.isPresent()) {
+            jsonValueMethod.get().setAccessible(true);
+            PrimitiveType primitiveType = PrimitiveType.fromType(jsonValueMethod.get().getReturnType());
+            if (primitiveType != null) {
+                schema = openapi31 ? primitiveType.createProperty31() : primitiveType.createProperty();
+            }
+        }
+        if (schema == null) {
+            schema = openapi31 ? new JsonSchema().typesItem("string") : new StringSchema();
+        }
 
         Enum<?>[] enumConstants = enumClass.getEnumConstants();
 
         if (enumConstants != null) {
-            String[] enumValues = _intr().findEnumValues(propClass, enumConstants,
+            String[] enumValues = _intr().findEnumValues(enumClass, enumConstants,
                     new String[enumConstants.length]);
 
             for (Enum<?> en : enumConstants) {
-                String n;
-
                 Field enumField = ReflectionUtils.findField(en.name(), enumClass);
                 if (null != enumField && enumField.isAnnotationPresent(Hidden.class)) {
                     continue;
                 }
 
                 String enumValue = enumValues[en.ordinal()];
-                String methodValue = jsonValueMethod.flatMap(m -> ReflectionUtils.safeInvoke(m, en)).map(Object::toString).orElse(null);
-                String fieldValue = jsonValueField.flatMap(f -> ReflectionUtils.safeGet(f, en)).map(Object::toString).orElse(null);
+                Object methodValue = jsonValueMethod.flatMap(m -> ReflectionUtils.safeInvoke(m, en)).orElse(null);
+                Object fieldValue = jsonValueField.flatMap(f -> ReflectionUtils.safeGet(f, en)).orElse(null);
 
+                Object n;
                 if (methodValue != null) {
                     n = methodValue;
                 } else if (fieldValue != null) {
@@ -1346,16 +1376,10 @@ public class ModelResolver extends AbstractModelConverter implements ModelConver
                 } else {
                     n = _intr().findEnumValue(en);
                 }
-                if (isStringSchema(property)) {
-                    if (openapi31) {
-                        property.addEnumItemObject(n);
-                    } else {
-                        StringSchema sp = (StringSchema) property;
-                        sp.addEnumItem(n);
-                    }
-                }
+                schema.addEnumItemObject(n);
             }
         }
+        return schema;
     }
 
     protected boolean ignore(final Annotated member, final XmlAccessorType xmlAccessorTypeAnnotation, final String propName, final Set<String> propertiesToIgnore) {
@@ -1740,7 +1764,7 @@ public class ModelResolver extends AbstractModelConverter implements ModelConver
 
         if (parent != null &&
                 Arrays.stream(annotations).anyMatch(
-                        annotation -> annotation.annotationType().getSimpleName().equals("NonNull"))) {
+                        annotation -> annotation.annotationType().getSimpleName().equalsIgnoreCase("NonNull"))) {
             modified = updateRequiredItem(parent, property.getName()) || modified;
 
         }
@@ -1889,6 +1913,20 @@ public class ModelResolver extends AbstractModelConverter implements ModelConver
                 }
             }
         }
+        if (annos.containsKey("javax.validation.constraints.Email")) {
+            Email email = (Email) annos.get("javax.validation.constraints.Email");
+            boolean apply = checkGroupValidation(email.groups(), invocationGroups, acceptNoGroups);
+            if (apply) {
+                if (isStringSchema(property)) {
+                    property.setFormat("email");
+                    modified = true;
+                }
+                if (property.getItems() != null && isStringSchema(property.getItems())) {
+                    property.getItems().setFormat("email");
+                    modified = true;
+                }
+            }
+        }
         if (validatorProcessor != null && validatorProcessor.getMode().equals(ValidatorProcessor.MODE.AFTER)) {
             modified = validatorProcessor.applyBeanValidatorAnnotations(property, annotations, parent, applyNotNullAnnotations) || modified;
         }
@@ -1996,6 +2034,16 @@ public class ModelResolver extends AbstractModelConverter implements ModelConver
             }
             if (property.getItems() != null && isStringSchema(property.getItems())) {
                 property.getItems().setPattern(pattern.regexp());
+                modified = true;
+            }
+        }
+        if (annos.containsKey("javax.validation.constraints.Email")) {
+            if (isStringSchema(property)) {
+                property.setFormat("email");
+                modified = true;
+            }
+            if (property.getItems() != null && isStringSchema(property.getItems())) {
+                property.getItems().setFormat("email");
                 modified = true;
             }
         }
@@ -2914,6 +2962,13 @@ public class ModelResolver extends AbstractModelConverter implements ModelConver
         return null;
     }
 
+    protected String resolve$dynamicRef(Annotated a, Annotation[] annotations, io.swagger.v3.oas.annotations.media.Schema schema) {
+        if (schema != null && StringUtils.isNotBlank(schema.$dynamicRef())) {
+            return schema.$dynamicRef();
+        }
+        return null;
+    }
+
     protected String resolveContentEncoding(Annotated a, Annotation[] annotations, io.swagger.v3.oas.annotations.media.Schema schema) {
         if (schema != null && StringUtils.isNotBlank(schema.contentEncoding())) {
             return schema.contentEncoding();
@@ -3283,6 +3338,10 @@ public class ModelResolver extends AbstractModelConverter implements ModelConver
             String $dynamicAnchor = resolve$dynamicAnchor(a, annotations, schemaAnnotation);
             if ($dynamicAnchor != null) {
                 schema.$dynamicAnchor($dynamicAnchor);
+            }
+            String $dynamicRef = resolve$dynamicRef(a, annotations, schemaAnnotation);
+            if ($dynamicRef != null) {
+                schema.$dynamicRef($dynamicRef);
             }
             String contentEncoding = resolveContentEncoding(a, annotations, schemaAnnotation);
             if (contentEncoding != null) {
